@@ -31,11 +31,11 @@ python3 ./grok-imagine-video.py -p "slow serene time-lapse" -d 10 -r 1080p
 
 python3 ./grok-imagine-video.py -d 8 -m grok-imagine-video-1.5 -i first:milkyway.png -p "slow serene time-lapse"
 
-python3 ./grok-imagine-video.py -i ref:person.png ref:shirt.png -p "the person from <IMAGE_1> wears the shirt from <IMAGE_2>" -a eve
+python3 ./grok-imagine-video.py -i ref:person.png ref:shirt.png -ar 9:16 -p "the person from <IMAGE_1> wears the shirt from <IMAGE_2>" -a eve
 
 python3 ./grok-imagine-video.py -i first:open.png 3:middle.png last:close.png -d 8 -p "dolly through the room"
 
-python3 ./grok-imagine-video.py -i loop:scene.png -d 6 -s -ar 9:16 -p "a gentle loop"
+python3 ./grok-imagine-video.py -i loop:scene.png -d 6 -s -p "a gentle loop"
 
 python3 ./grok-imagine-video.py -l
 ```
@@ -50,7 +50,7 @@ Stdout for a generation is only the video URL. Progress and errors go to stderr.
 | `-m`, `--model` | Model name. Default `grok-imagine-video-1.5`. |
 | `-i`, `--images` | One or more local image files or `http(s)` URLs. |
 | `-d`, `--duration` | Length in whole seconds, from 1 through 15. Omit it and the API uses 8 seconds. |
-| `-ar`, `--aspect-ratio` | `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, or `2:3`. Omit it and the API uses `16:9`. |
+| `-ar`, `--aspect-ratio` | `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, or `2:3`. Used for text-to-video and for reference images. A first frame keeps the source image's shape, and `-ar` is ignored. |
 | `-r`, `--resolution` | `480p`, `720p`, or `1080p`. Omit it and the API uses `480p`. |
 | `-s`, `--silent` | Video with no audio track. Leave `-a` off when you use this. |
 | `-a`, `--audio` | Up to 3 preset voice ids, such as `eve`, `ara`, `leo`, or `rex`. Example: `-a eve leo`. |
@@ -73,6 +73,8 @@ Each `--images` value is a local file (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`)
 | `3:` or `3.5:` | Exact frame at that many seconds inside the clip |
 
 Prefix every image, or leave every image bare. `loop:` already sets both ends, so leave out `first:` and `last:` when you use it. You can combine `ref:` with pinned frames.
+
+`-ar` changes the frame for a text prompt, and for images passed only as references (`ref:` or several bare paths). On grok.com, and in image-to-video here, a first frame keeps that picture's own aspect ratio. One bare image, `first:`, `last:`, `loop:`, and a timestamp such as `3:` are pinned frames, so `-ar` does not reshape them. A 4:3 photo used as the first frame stays horizontal even with `-ar 3:4`.
 
 `1080p` is for a prompt with no images, or for one first frame. Reference images, voices, a last frame, a loop, and middle frames are reference-to-video, and that mode stops at `720p`.
 
