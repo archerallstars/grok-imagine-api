@@ -25,7 +25,7 @@ from pathlib import Path
 
 # Third-party imports
 import xai_sdk
-from xai_sdk.types import UrlKeyframe, VideoAspectRatio, VoiceAudioRef
+from xai_sdk.types import UrlKeyframe, VideoAspectRatio, VideoResolution, VoiceAudioRef
 
 # =============================================================================
 # CONFIGURATION - Customizable variables and switches (grouped by category)
@@ -56,6 +56,14 @@ allowed_video_aspect_ratio_by_text: dict[str, VideoAspectRatio] = {
     "3:2": "3:2",  # photo horizontal
     "2:3": "2:3",  # photo vertical
 }
+
+# --- Resolution values accepted by client.video.generate ---
+allowed_video_resolution_by_text: dict[str, VideoResolution] = {
+    "480p": "480p",  # API default when -r is omitted
+    "720p": "720p",  # highest resolution for reference-to-video
+    "1080p": "1080p",  # text-to-video and a lone first frame on grok-imagine-video-1.5
+}
+reference_to_video_maximum_resolution: VideoResolution = "720p"  # docs cap for references, voices, and extra pins
 
 # --- Saved video URLs. response.url is documented as valid for 24 hours. ---
 generated_video_catalog_file_name: str = "generated-videos.json"  # stored beside this script
@@ -102,6 +110,10 @@ An unknown voice id is rejected by the API, which returns the current voice list
 -s / --silent builds a video with no audio track. Leave -a off when you use it.
 -ar / --aspect-ratio is one of 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3.
 Leave it off and the API uses 16:9.
+-r / --resolution is 480p, 720p, or 1080p.
+Leave it off and the API uses 480p.
+1080p is for a prompt alone, or for one first frame.
+Reference images, voices, a last frame, a loop, and middle frames stop at 720p.
 
 -l / --list-generated-videos prints URLs saved beside this script.
 Use that flag alone. Each saved URL is kept for 24 hours.
@@ -113,7 +125,7 @@ When --api-key is omitted, the key is read from XAI_API_KEY.
 
 command_help_epilog: str = """
 examples:
-  python3 ./grok-imagine-video.py -p "slow serene time-lapse" -d 10
+  python3 ./grok-imagine-video.py -p "slow serene time-lapse" -d 10 -r 1080p
   python3 ./grok-imagine-video.py -d 8 -m grok-imagine-video-1.5 -i first:milkyway.png -p "slow serene time-lapse"
   python3 ./grok-imagine-video.py -i ref:person.png ref:shirt.png -p "the person from <IMAGE_1> wears the shirt from <IMAGE_2>" -a eve
   python3 ./grok-imagine-video.py -i first:open.png 3:middle.png last:close.png -d 8 -p "dolly through the room"
@@ -213,6 +225,7 @@ class VideoCommandRequest:
     reference_voice_id_list: list[str]
     api_key_argument: str | None  # None means the SDK should read XAI_API_KEY
     aspect_ratio: VideoAspectRatio | None  # None lets the API use 16:9
+    resolution: VideoResolution | None  # None lets the API use 480p
     image_role_assignment: VideoImageRoleAssignment
 
 
@@ -225,6 +238,7 @@ class GeneratedVideoRecord:
     prompt_text: str
     video_generation_model_name: str
     aspect_ratio_text: str | None  # None when -ar was omitted
+    resolution_text: str | None  # None when -r was omitted
     duration_seconds: int | None  # None when -d was omitted
 
 
@@ -875,6 +889,7 @@ def generated_video_catalog_assemble_record_list(catalog_payload: object) -> lis
                     prompt_text = video_entry.get("prompt")
                     video_generation_model_name = video_entry.get("model")
                     aspect_ratio_text = video_entry.get("aspect_ratio")
+                    resolution_text = video_entry.get("resolution")
                     duration_seconds = video_entry.get("duration_seconds")
                     if not isinstance(video_url, str) or video_url.strip() == "":
                         raise VideoCommandError(
@@ -896,6 +911,11 @@ def generated_video_catalog_assemble_record_list(catalog_payload: object) -> lis
                             f"{generated_video_catalog_file_name} has a record with an unreadable aspect ratio. "
                             "The file was left unchanged."
                         )
+                    elif resolution_text is not None and not isinstance(resolution_text, str):
+                        raise VideoCommandError(
+                            f"{generated_video_catalog_file_name} has a record with an unreadable resolution. "
+                            "The file was left unchanged."
+                        )
                     elif duration_seconds is not None and (
                         isinstance(duration_seconds, bool) or not isinstance(duration_seconds, int)
                     ):
@@ -912,6 +932,7 @@ def generated_video_catalog_assemble_record_list(catalog_payload: object) -> lis
                                 prompt_text=prompt_text,
                                 video_generation_model_name=video_generation_model_name,
                                 aspect_ratio_text=aspect_ratio_text,
+                                resolution_text=resolution_text,
                                 duration_seconds=duration_seconds,
                             )
                         )
@@ -963,6 +984,7 @@ def generated_video_catalog_bytes_write(generated_video_record_list: list[Genera
                 "prompt": generated_video_record.prompt_text,
                 "model": generated_video_record.video_generation_model_name,
                 "aspect_ratio": generated_video_record.aspect_ratio_text,
+                "resolution": generated_video_record.resolution_text,
                 "duration_seconds": generated_video_record.duration_seconds,
             }
             for generated_video_record in generated_video_record_list
@@ -1103,13 +1125,17 @@ def generated_video_catalog_text_for_list() -> str:
                 aspect_ratio_display_text = "aspect default"
             else:
                 aspect_ratio_display_text = generated_video_record.aspect_ratio_text
+            if generated_video_record.resolution_text is None:
+                resolution_display_text = "resolution default"
+            else:
+                resolution_display_text = generated_video_record.resolution_text
             if generated_video_record.duration_seconds is None:
                 duration_display_text = "duration default"
             else:
                 duration_display_text = f"{generated_video_record.duration_seconds}s"
             generated_video_catalog_block_list.append(
                 f"{generated_video_record.generated_at_utc}  {aspect_ratio_display_text}  "
-                f"{duration_display_text}\n"
+                f"{resolution_display_text}  {duration_display_text}\n"
                 f"{generated_video_record.video_url}\n"
                 f"{generated_video_record.prompt_text}"
             )
@@ -1190,6 +1216,14 @@ def cli_argument_parser_build() -> argparse.ArgumentParser:
         default=None,
         metavar="RATIO",
         help="One of 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3. Omit it to let the API use 16:9.",
+    )
+    argument_parser.add_argument(
+        "-r",
+        "--resolution",
+        dest="resolution_argument",
+        default=None,
+        metavar="RESOLUTION",
+        help="480p, 720p, or 1080p. Omit it to let the API use 480p. 1080p stops at a prompt or one first frame.",
     )
     argument_parser.add_argument(
         "-s",
@@ -1316,6 +1350,7 @@ def cli_list_generated_videos_conflict_check(parsed_arguments: argparse.Namespac
         or parsed_arguments.silent_video_requested
         or parsed_arguments.audio_argument is not None
         or parsed_arguments.aspect_ratio_argument is not None
+        or parsed_arguments.resolution_argument is not None
         or parsed_arguments.api_key_argument is not None
     )
     if generation_flag_present:
@@ -1324,6 +1359,24 @@ def cli_list_generated_videos_conflict_check(parsed_arguments: argparse.Namespac
         )
     else:
         return None  # -l is the only requested action
+
+
+def cli_output_resolution_resolve(resolution_argument: str | None) -> VideoResolution | None:
+    """Map -r to a VideoResolution, or None when the flag was omitted.
+
+    Input is the raw flag text.
+    Returns 480p, 720p, or 1080p.
+    Raises VideoCommandError when the text is not one of those three.
+    """
+    if resolution_argument is None:
+        return None  # omit resolution and keep the API default of 480p
+    else:
+        stripped_resolution_argument = resolution_argument.strip()
+        if stripped_resolution_argument in allowed_video_resolution_by_text:
+            return allowed_video_resolution_by_text[stripped_resolution_argument]  # typed SDK resolution
+        else:
+            allowed_resolution_text = ", ".join(allowed_video_resolution_by_text)
+            raise VideoCommandError(f"Resolution must be one of: {allowed_resolution_text}.")
 
 
 def cli_parsed_arguments_validate(parsed_arguments: argparse.Namespace) -> VideoCommandRequest:
@@ -1341,6 +1394,7 @@ def cli_parsed_arguments_validate(parsed_arguments: argparse.Namespace) -> Video
     audio_argument = parsed_arguments.audio_argument
     api_key_argument = parsed_arguments.api_key_argument
     aspect_ratio = cli_aspect_ratio_resolve(parsed_arguments.aspect_ratio_argument)
+    resolution = cli_output_resolution_resolve(parsed_arguments.resolution_argument)
     image_role_assignment = image_argument_resolved_role_assignment_build(image_argument_token_list)
     middle_keyframe_present = len(image_role_assignment.middle_keyframe_list) > 0
     duration_seconds = cli_duration_seconds_resolve(duration_argument, middle_keyframe_present)
@@ -1355,6 +1409,21 @@ def cli_parsed_arguments_validate(parsed_arguments: argparse.Namespace) -> Video
     else:
         pass
     reference_voice_id_list = cli_audio_voice_id_list_flatten(audio_argument)
+    reference_to_video_requested = (
+        len(image_role_assignment.reference_image_source_text_list) > 0
+        or image_role_assignment.last_frame_source_text is not None
+        or image_role_assignment.loop_frame_source_text is not None
+        or middle_keyframe_present
+        or len(reference_voice_id_list) > 0
+    )
+    if resolution == "1080p" and reference_to_video_requested:
+        raise VideoCommandError(
+            "1080p is available for a prompt alone, or for one first frame. "
+            f"Reference images, voices, a last frame, a loop, and middle frames stop at "
+            f"{reference_to_video_maximum_resolution}."
+        )
+    else:
+        pass
     if silent_video_requested and len(reference_voice_id_list) > 0:
         raise VideoCommandError(
             "Use -s/--silent only when -a/--audio is omitted. A silent video has no narration."
@@ -1391,6 +1460,7 @@ def cli_parsed_arguments_validate(parsed_arguments: argparse.Namespace) -> Video
         reference_voice_id_list=reference_voice_id_list,
         api_key_argument=api_key_argument,
         aspect_ratio=aspect_ratio,
+        resolution=resolution,
         image_role_assignment=image_role_assignment,
     )  # flags are consistent; local files are still paths
 
@@ -1513,6 +1583,7 @@ def video_generation_start(video_command_request: VideoCommandRequest) -> str:
         keyframes=keyframe_list,
         duration=video_command_request.duration_seconds,
         aspect_ratio=video_command_request.aspect_ratio,
+        resolution=video_command_request.resolution,
         reference_image_urls=reference_image_url_list,
         reference_audios=reference_audio_list,
         generate_audio=generate_audio,
@@ -1524,6 +1595,7 @@ def video_generation_start(video_command_request: VideoCommandRequest) -> str:
         prompt_text=video_command_request.prompt_text,
         video_generation_model_name=video_command_request.video_generation_model_name,
         aspect_ratio_text=video_command_request.aspect_ratio,
+        resolution_text=video_command_request.resolution,
         duration_seconds=video_command_request.duration_seconds,
     )
     try:
